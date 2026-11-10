@@ -105,7 +105,7 @@ html, body, .stApp, [data-testid="stMain"] { overflow-x: hidden; }
 
 /* page background: light green with soft green glows down both sides.
    The glows tile every 900px and use attachment: local, so they scroll WITH the page (never fixed behind results) */
-.stApp { background: #F4FFDF; }
+.stApp { background: #F2FAE2; }
 [data-testid="stMain"], section.main {
     background-image: radial-gradient(ellipse 430px 340px at 0% 420px, rgba(197,211,120,.85), rgba(197,211,120,0)),
                       radial-gradient(ellipse 430px 340px at 100% 480px, rgba(197,211,120,.85), rgba(197,211,120,0));
