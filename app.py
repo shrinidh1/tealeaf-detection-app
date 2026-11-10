@@ -19,6 +19,7 @@ LOGO_PATH = ASSETS_DIR / "logo.png"      # your leaf logo (put logo.png inside a
 GITHUB_URL = ""      # paste your repo link to show a "view the source code" link in the intro
 DATA_CREDIT = ""     # optional dataset credit shown in the footer
 GUIDE_ORDER = ["Anthracnose", "Brown Blight", "White Spot", "Algal Leaf Spot"]
+CONF_MIN, CONF_MAX = 0.10, 0.90   # range of the confidence slider
 APP_NAME = "TeaLeaf-AI"
 APP_TITLE = "Tea Plant Disease Detection Tool"
 PROJECT_TITLE = "Development of Tea Plant Disease Detection Tool"
@@ -105,7 +106,7 @@ html, body, .stApp, [data-testid="stMain"] { overflow-x: hidden; }
 
 /* page background: light green with soft green glows down both sides.
    The glows tile every 900px and use attachment: local, so they scroll WITH the page (never fixed behind results) */
-.stApp { background: #F2FAE2; }
+.stApp { background: #EEF5E1; }
 [data-testid="stMain"], section.main {
     background-image: radial-gradient(ellipse 430px 340px at 0% 420px, rgba(197,211,120,.85), rgba(197,211,120,0)),
                       radial-gradient(ellipse 430px 340px at 100% 480px, rgba(197,211,120,.85), rgba(197,211,120,0));
@@ -195,7 +196,9 @@ html, body, .stApp, [data-testid="stMain"] { overflow-x: hidden; }
 [data-testid="stSlider"] [role="slider"] { background: var(--dark) !important;
                                            box-shadow: 0 0 0 5px var(--light) !important; border: none !important; }
 [data-testid="stSliderThumbValue"] { color: var(--dark) !important; font-weight: 500; }
-[data-testid="stSliderTickBarMin"], [data-testid="stSliderTickBarMax"] { color: var(--muted) !important; font-size: .8rem; }
+/* Streamlit only shows its own 0.10 / 0.90 labels on hover, so they are hidden and replaced by an always-visible row */
+[data-testid="stSliderTickBar"] { display: none !important; }
+.slider-range { display: flex; justify-content: space-between; font-size: .8rem; color: var(--muted); padding: 0 .15rem; margin-top: -.2rem; }
 .slider-help { font-size: .95rem; color: var(--muted); margin-top: .3rem; }
 
 [data-testid="stFormSubmitButton"] button { background: var(--dark); border: 1px solid var(--dark); border-radius: 8px;
@@ -469,7 +472,9 @@ def home():
         st.markdown('<div class="field-label gap">Detection confidence</div>', unsafe_allow_html=True)
         c1, c2 = st.columns([4, 1.15], vertical_alignment="center")
         with c1:
-            conf = st.slider("Detection confidence", 0.10, 0.90, 0.35, 0.05, label_visibility="collapsed")
+            conf = st.slider("Detection confidence", CONF_MIN, CONF_MAX, 0.35, 0.05, label_visibility="collapsed")
+            st.markdown(f'<div class="slider-range"><span>{CONF_MIN:.2f}</span><span>{CONF_MAX:.2f}</span></div>',
+                        unsafe_allow_html=True)
             st.markdown('<div class="slider-help">Lower = more detections (may include noise) · '
                         'Higher = only high-confidence boxes</div>', unsafe_allow_html=True)
         with c2:
