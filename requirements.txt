@@ -1,7 +1,7 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
 torchvision
-ultralytics==x.y.z
-streamlit==x.y.z
+ultralytics==0.0.8
+streamlit
 pillow
 pandas
