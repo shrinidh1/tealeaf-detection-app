@@ -1,4 +1,5 @@
 import base64
+import csv
 import html
 import io
 import re
@@ -106,7 +107,7 @@ html, body, .stApp, [data-testid="stMain"] { overflow-x: hidden; }
 
 /* page background: light green with soft green glows down both sides.
    The glows tile every 900px and use attachment: local, so they scroll WITH the page (never fixed behind results) */
-.stApp { background: #EEF5E1; }
+.stApp { background: #F4FFDF; }
 [data-testid="stMain"], section.main {
     background-image: radial-gradient(ellipse 430px 340px at 0% 420px, rgba(197,211,120,.85), rgba(197,211,120,0)),
                       radial-gradient(ellipse 430px 340px at 100% 480px, rgba(197,211,120,.85), rgba(197,211,120,0));
@@ -225,6 +226,23 @@ html, body, .stApp, [data-testid="stMain"] { overflow-x: hidden; }
 table.det { width: 100%; border-collapse: collapse; background: #ffffff; color: var(--text); font-size: 1rem; margin-bottom: .5rem; }
 table.det th { text-align: left; color: var(--muted); font-size: .85rem; padding: .5rem .7rem; border-bottom: 2px solid var(--grey); }
 table.det td { padding: .5rem .7rem; border-bottom: 1px solid var(--line); }
+
+/* download buttons: PDF = solid green, CSV = white with green outline */
+.dl-note { font-size: .95rem; color: var(--muted); margin: -.3rem 0 1rem 0; }
+[data-testid="stDownloadButton"] button { border-radius: 8px; min-height: 3.1rem; font-weight: 600; width: 100%; }
+[data-testid="stDownloadButton"] button p { font-size: 1.05rem; font-weight: 600; }
+[data-testid="stDownloadButton"] button[data-testid="stBaseButton-primary"],
+[data-testid="stDownloadButton"] button[kind="primary"] { background: var(--dark); border: 1.5px solid var(--dark); }
+[data-testid="stDownloadButton"] button[data-testid="stBaseButton-primary"] *,
+[data-testid="stDownloadButton"] button[kind="primary"] * { color: #ffffff !important; }
+[data-testid="stDownloadButton"] button[data-testid="stBaseButton-primary"]:hover,
+[data-testid="stDownloadButton"] button[kind="primary"]:hover { background: var(--dark-hover); border-color: var(--dark-hover); }
+[data-testid="stDownloadButton"] button[data-testid="stBaseButton-secondary"],
+[data-testid="stDownloadButton"] button[kind="secondary"] { background: #ffffff; border: 1.5px solid var(--dark); }
+[data-testid="stDownloadButton"] button[data-testid="stBaseButton-secondary"] *,
+[data-testid="stDownloadButton"] button[kind="secondary"] * { color: var(--dark) !important; }
+[data-testid="stDownloadButton"] button[data-testid="stBaseButton-secondary"]:hover,
+[data-testid="stDownloadButton"] button[kind="secondary"]:hover { background: var(--soft); }
 
 /* ---------- disease cards (guide page + detection results) ---------- */
 .dcard { background: #ffffff; border-radius: 14px; padding: 1.8rem 1.9rem 2rem 1.9rem; margin: 0 0 4.5rem 0;
@@ -442,6 +460,210 @@ def load_model():
     return YOLO(str(MODEL_PATH))
 
 
+# ---------- results: export (CSV + PDF) ----------
+def make_csv(dets):
+    """The detection table as CSV bytes (every detection, not only the 30 shown on screen)."""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["No.", "Disease", "Confidence"])
+    for i, (name, c) in enumerate(dets, 1):
+        w.writerow([i, name, f"{c:.2f}"])
+    return buf.getvalue().encode("utf-8-sig")      # BOM so Excel opens it correctly
+
+
+def make_pdf(img, annotated, dets, conf, filename, stamp):
+    """A one-file report: both images, a summary, the full detection table and the disease information."""
+    from xml.sax.saxutils import escape
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+    from reportlab.platypus import (HRFlowable, Image as RLImage, KeepTogether, Paragraph, SimpleDocTemplate,
+                                    Spacer, Table, TableStyle)
+
+    green, soft, grey, line = (colors.HexColor(c) for c in ("#485E21", "#F4F6EA", "#7a7f70", "#dfe2d6"))
+    page_w = A4[0] - 36 * mm                      # usable width (18 mm margins)
+
+    def t(x):                                     # text safe for the built-in PDF fonts
+        return escape(str(x).encode("cp1252", "replace").decode("cp1252"))
+
+    base = ParagraphStyle("base", fontName="Helvetica", fontSize=10, leading=14, textColor=colors.HexColor("#1f2417"))
+    small = ParagraphStyle("small", parent=base, fontSize=8.5, leading=12, textColor=grey)
+    brand = ParagraphStyle("brand", parent=base, fontName="Helvetica-Bold", fontSize=15, textColor=green)
+    title = ParagraphStyle("title", parent=base, fontName="Helvetica-Bold", fontSize=20, leading=25, textColor=green)
+    h2 = ParagraphStyle("h2", parent=base, fontName="Helvetica-Bold", fontSize=14, leading=18, textColor=green,
+                        spaceBefore=14, spaceAfter=6)
+    h3 = ParagraphStyle("h3", parent=base, fontName="Helvetica-Bold", fontSize=10.5, textColor=green,
+                        spaceBefore=6, spaceAfter=2)
+    cap = ParagraphStyle("cap", parent=base, fontName="Helvetica-Bold", fontSize=12, alignment=TA_CENTER, spaceBefore=4)
+    bullet = ParagraphStyle("bullet", parent=base, fontSize=9.5, leading=13, leftIndent=11, firstLineIndent=-9)
+    cell = ParagraphStyle("cell", parent=base, fontSize=9.5, leading=12)
+    cell_b = ParagraphStyle("cell_b", parent=cell, fontName="Helvetica-Bold")
+    head = ParagraphStyle("head", parent=cell, fontName="Helvetica-Bold", textColor=colors.white)
+
+    def fit(pil, max_w, max_h):
+        buf = io.BytesIO()
+        pil.convert("RGB").save(buf, "JPEG", quality=88)
+        buf.seek(0)
+        w, h = pil.size
+        k = min(max_w / w, max_h / h)
+        return RLImage(buf, width=w * k, height=h * k)
+
+    def grid(rows, widths, header=True):
+        tb = Table(rows, colWidths=widths, repeatRows=1 if header else 0)
+        style = [("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 5),
+                 ("BOTTOMPADDING", (0, 0), (-1, -1), 5), ("LINEBELOW", (0, 0), (-1, -1), 0.5, line)]
+        if header:
+            style += [("BACKGROUND", (0, 0), (-1, 0), green)]
+            style += [("BACKGROUND", (0, i), (-1, i), soft) for i in range(2, len(rows), 2)]
+        tb.setStyle(TableStyle(style))
+        return tb
+
+    story = []
+    # header: logo + name on the left, date on the right
+    logo = RLImage(str(LOGO_PATH), 11 * mm, 11 * mm, mask="auto") if LOGO_PATH.exists() else ""
+    story.append(Table([[logo, Paragraph(APP_NAME, brand),
+                         Paragraph(t(stamp.strftime("%d %b %Y, %H:%M")), ParagraphStyle("r", parent=small, alignment=TA_RIGHT))]],
+                       colWidths=[15 * mm, page_w - 15 * mm - 50 * mm, 50 * mm],
+                       style=[("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (0, 0), 0)]))
+    story += [Spacer(1, 3 * mm), HRFlowable(width="100%", color=line, thickness=1), Spacer(1, 4 * mm)]
+    story.append(Paragraph("Tea Plant Disease Detection Report", title))
+    story.append(Spacer(1, 3 * mm))
+
+    # image + settings
+    meta = [[Paragraph("Image", cell_b), Paragraph(t(filename), cell)],
+            [Paragraph("Confidence threshold", cell_b), Paragraph(f"{conf:.2f}", cell)],
+            [Paragraph("Model", cell_b), Paragraph("YOLO11 (custom-trained)", cell)]]
+    story.append(grid(meta, [42 * mm, page_w - 42 * mm], header=False))
+    story.append(Spacer(1, 4 * mm))
+    if dets:
+        kinds = len({n for n, _ in dets})
+        verdict = f"{len(dets)} affected area{'s' if len(dets) != 1 else ''} found, across {kinds} disease type{'s' if kinds != 1 else ''}."
+    else:
+        verdict = "No disease was detected at this confidence."
+    story.append(Paragraph(f"<b>Result:</b> {t(verdict)}", base))
+    story.append(Spacer(1, 4 * mm))
+
+    # both pictures side by side
+    half = (page_w - 6 * mm) / 2
+    story.append(Table([[fit(img, half, 95 * mm), fit(annotated, half, 95 * mm)],
+                        [Paragraph("Your image", cap), Paragraph("Detected areas", cap)]],
+                       colWidths=[half + 3 * mm, half + 3 * mm],
+                       style=[("VALIGN", (0, 0), (-1, 0), "TOP"), ("ALIGN", (0, 0), (-1, -1), "CENTER")]))
+
+    if dets:
+        counts = Counter(n for n, _ in dets)
+        best = {}
+        for n, c in dets:
+            best[n] = max(best.get(n, 0.0), c)
+        order = [n for n, _ in counts.most_common()]
+
+        story.append(Paragraph("Summary", h2))
+        rows = [[Paragraph("Disease", head), Paragraph("Areas found", head), Paragraph("Highest confidence", head)]]
+        rows += [[Paragraph(t(n), cell), Paragraph(str(counts[n]), cell), Paragraph(f"{best[n]:.2f}", cell)] for n in order]
+        story.append(grid(rows, [page_w * 0.5, page_w * 0.2, page_w * 0.3]))
+
+        story.append(Paragraph("All detections", h2))
+        rows = [[Paragraph("No.", head), Paragraph("Disease", head), Paragraph("Confidence", head)]]
+        rows += [[Paragraph(str(i), cell), Paragraph(t(n), cell), Paragraph(f"{c:.2f}", cell)]
+                 for i, (n, c) in enumerate(dets, 1)]
+        story.append(grid(rows, [page_w * 0.12, page_w * 0.58, page_w * 0.30]))
+
+        story.append(Paragraph("Disease information", h2))
+        for n in order:
+            info = get_info(n)
+            if not info:
+                continue
+            block = [Paragraph(t(info["title"]), ParagraphStyle("dt", parent=h3, fontSize=12.5, spaceBefore=8)),
+                     Paragraph(f"<i>{t(info['cause'])}</i>", small), Spacer(1, 1.5 * mm),
+                     Paragraph(t(info["summary"]), base)]
+            for head_txt, key in (("Symptoms", "symptoms"), ("How it spreads", "spread"), ("Management", "management")):
+                if info.get(key):
+                    block.append(Paragraph(head_txt, h3))
+                    block += [Paragraph("&bull; " + t(x), bullet) for x in info[key]]
+            story.append(KeepTogether(block))
+
+    def on_page(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(grey)
+        canvas.drawString(18 * mm, 10 * mm, "AI predictions are a guide, not a diagnosis. Confirm with an agricultural expert before treating.")
+        canvas.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Page {doc.page}")
+        canvas.restoreState()
+
+    out = io.BytesIO()
+    SimpleDocTemplate(out, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=15 * mm,
+                      bottomMargin=18 * mm, title="Tea Plant Disease Detection Report",
+                      author=APP_NAME).build(story, onFirstPage=on_page, onLaterPages=on_page)
+    return out.getvalue()
+
+
+def build_result(img, annotated, dets, conf, filename):
+    """Everything about one analysis, kept in session_state so the page (and its download buttons) survive reruns."""
+    stamp = datetime.now()
+    try:
+        pdf = make_pdf(img, annotated, dets, conf, filename, stamp)
+    except Exception:          # e.g. reportlab not installed: the rest of the app keeps working
+        pdf = None
+    return {"img": img, "annotated": annotated, "dets": dets, "conf": conf, "stamp": stamp,
+            "pdf": pdf, "csv": make_csv(dets)}
+
+
+def show_results(r):
+    st.markdown('<div class="h2">Result</div>', unsafe_allow_html=True)
+    col_a, col_b = st.columns(2)
+    col_a.image(r["img"], caption="Your image", width="stretch")
+    col_b.image(r["annotated"], caption="Detected areas", width="stretch")
+
+    dets = r["dets"]
+    if not dets:
+        notice("No disease was detected at this confidence. Try a closer, well-lit photo, "
+               "or lower the confidence slider.")
+    else:
+        counts = Counter(n for n, _ in dets)
+        best = {}
+        for n, c in dets:
+            best[n] = max(best.get(n, 0.0), c)
+        order = [n for n, _ in counts.most_common()]
+
+        stats = "".join(
+            f'<div class="stat"><div class="n">{counts[n]}</div><div class="l">{html.escape(n)}</div>'
+            f'<div class="c">highest confidence {best[n]:.2f}</div></div>'
+            for n in order
+        )
+        st.markdown(f'<div class="stats">{stats}</div>', unsafe_allow_html=True)
+
+        rows = "".join(f"<tr><td>{html.escape(n)}</td><td>{c:.2f}</td></tr>" for n, c in dets[:30])
+        st.markdown(f'<table class="det"><tr><th>Disease</th><th>Confidence</th></tr>{rows}</table>',
+                    unsafe_allow_html=True)
+        if len(dets) > 30:
+            st.markdown(f'<div class="dl-note">Showing the 30 most confident of {len(dets)} detections. '
+                        'The downloads contain all of them.</div>', unsafe_allow_html=True)
+
+    # ----- download results -----
+    stem = "tealeaf_results_" + r["stamp"].strftime("%Y%m%d_%H%M")
+    st.markdown('<div class="h2">Download results</div>', unsafe_allow_html=True)
+    st.markdown('<div class="dl-note">Save this analysis as a PDF report (with both images) '
+                'or as a CSV file of the detection table.</div>', unsafe_allow_html=True)
+    d1, d2 = st.columns(2)
+    with d1:
+        if r["pdf"]:
+            st.download_button("Download PDF report", data=r["pdf"], file_name=stem + ".pdf",
+                               mime="application/pdf", icon=":material/picture_as_pdf:", type="primary",
+                               key="dl_pdf", width="stretch")
+        else:
+            notice("The PDF report is not available on this server.")
+    with d2:
+        st.download_button("Download CSV", data=r["csv"], file_name=stem + ".csv", mime="text/csv",
+                           icon=":material/table_view:", key="dl_csv", disabled=not dets, width="stretch")
+
+    if dets:
+        st.markdown('<div class="h2">Disease information</div>', unsafe_allow_html=True)
+        for n in [n for n, _ in Counter(n for n, _ in dets).most_common()]:
+            st.markdown(disease_card(n), unsafe_allow_html=True)
+
+
 # ---------- page 1: detector ----------
 def home():
     navbar("Disease Guide", guide_page)
@@ -482,49 +704,26 @@ def home():
 
     if submitted:
         if uploaded is None:
+            st.session_state.pop("result", None)
             notice("Please upload a leaf image first.")
         else:
             try:
                 img = ImageOps.exif_transpose(Image.open(uploaded)).convert("RGB")   # fixes rotated phone photos
                 img.thumbnail((1280, 1280))                                          # keeps CPU time low
             except Exception:
+                st.session_state.pop("result", None)
                 notice("That file could not be read as an image. Please upload a JPG or PNG.")
                 finish()
                 return
 
             with st.spinner("Analysing the leaf..."):
                 res = model.predict(img, conf=conf, imgsz=640, verbose=False)[0]
+                annotated = Image.fromarray(res.plot()[:, :, ::-1])                  # BGR to RGB
+                dets = sorted(((model.names[int(b.cls)], float(b.conf)) for b in res.boxes), key=lambda d: -d[1])
+                st.session_state["result"] = build_result(img, annotated, dets, conf, uploaded.name)
 
-            st.markdown('<div class="h2">Result</div>', unsafe_allow_html=True)
-            col_a, col_b = st.columns(2)
-            col_a.image(img, caption="Your image", width="stretch")
-            col_b.image(res.plot()[:, :, ::-1], caption="Detected areas", width="stretch")   # BGR to RGB
-
-            dets = sorted(((model.names[int(b.cls)], float(b.conf)) for b in res.boxes), key=lambda d: -d[1])
-            if not dets:
-                notice("No disease was detected at this confidence. Try a closer, well-lit photo, "
-                       "or lower the confidence slider.")
-            else:
-                counts = Counter(n for n, _ in dets)
-                best = {}
-                for n, c in dets:
-                    best[n] = max(best.get(n, 0.0), c)
-                order = [n for n, _ in counts.most_common()]
-
-                stats = "".join(
-                    f'<div class="stat"><div class="n">{counts[n]}</div><div class="l">{html.escape(n)}</div>'
-                    f'<div class="c">highest confidence {best[n]:.2f}</div></div>'
-                    for n in order
-                )
-                st.markdown(f'<div class="stats">{stats}</div>', unsafe_allow_html=True)
-
-                rows = "".join(f"<tr><td>{html.escape(n)}</td><td>{c:.2f}</td></tr>" for n, c in dets[:30])
-                st.markdown(f'<table class="det"><tr><th>Disease</th><th>Confidence</th></tr>{rows}</table>',
-                            unsafe_allow_html=True)
-
-                st.markdown('<div class="h2">Disease information</div>', unsafe_allow_html=True)
-                for n in order:
-                    st.markdown(disease_card(n), unsafe_allow_html=True)
+    if st.session_state.get("result"):
+        show_results(st.session_state["result"])
 
     finish()
 
