@@ -15,6 +15,7 @@ from disease_info import get_info
 
 BASE_DIR = Path(__file__).parent
 MODEL_PATH = BASE_DIR / "models" / "yolo11_S4_best.pt"
+SAMPLES_DIR = BASE_DIR / "sample_images"   # example leaf photos people can try without uploading
 ASSETS_DIR = BASE_DIR / "assets"          # logo.png and the four disease pictures live here
 LOGO_PATH = ASSETS_DIR / "logo.png"      # your leaf logo (put logo.png inside an "assets" folder)
 GITHUB_URL = ""      # paste your repo link to show a "view the source code" link in the intro
@@ -193,6 +194,15 @@ html, body, .stApp, [data-testid="stMain"] { overflow-x: hidden; }
 [data-testid="stFileUploaderDropzone"] button[data-testid="stBaseButton-secondary"]:hover { border-color: var(--dark); }
 [data-testid="stFileUploaderDropzone"] button[data-testid="stBaseButton-secondary"]:hover::after { color: var(--dark); }
 
+/* "or try a sample" row (pills) */
+.sample-label { font-weight: 500; font-size: 1rem; color: var(--text); margin: 1.2rem 0 .5rem 0; }
+.sample-help { font-size: .85rem; color: var(--muted); margin: .5rem 0 0 0; }
+[data-testid="stPills"] button { border-radius: 999px; border: 1px solid #7b8070; background: #ffffff; }
+[data-testid="stPills"] button, [data-testid="stPills"] button * { color: #5f6456 !important; font-size: .9rem; }
+[data-testid="stPills"] button:hover { border-color: var(--dark); }
+[data-testid="stPills"] button[data-testid="stBaseButton-pillsActive"] { background: var(--dark); border-color: var(--dark); }
+[data-testid="stPills"] button[data-testid="stBaseButton-pillsActive"] * { color: #ffffff !important; }
+
 /* slider: dark green fill comes from primaryColor in .streamlit/config.toml; ring around the thumb here */
 [data-testid="stSlider"] [role="slider"] { background: var(--dark) !important;
                                            box-shadow: 0 0 0 5px var(--light) !important; border: none !important; }
@@ -329,6 +339,14 @@ def ul(items):
 
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def list_samples():
+    """{label: path} for every picture in sample_images/ ('brown_blight_1.jpg' -> 'Brown Blight 1')."""
+    if not SAMPLES_DIR.exists():
+        return {}
+    files = sorted(f for f in SAMPLES_DIR.iterdir() if f.suffix.lower() in IMG_EXTS)
+    return {re.sub(r"[_\-]+", " ", f.stem).strip().title(): f for f in files}
 
 
 def _key(text):
@@ -691,6 +709,14 @@ def home():
         uploaded = st.file_uploader("Leaf image", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
         st.markdown('<div class="upload-help">Please upload a JPG or PNG file up to 200 MB.</div>',
                     unsafe_allow_html=True)
+        samples = list_samples()
+        sample_name = None
+        if samples:
+            st.markdown('<div class="sample-label">Or try a sample image</div>', unsafe_allow_html=True)
+            sample_name = st.pills("Sample image", list(samples), selection_mode="single",
+                                   label_visibility="collapsed", key="sample_pick")
+            st.markdown('<div class="sample-help">Pick one, then press Analyze. '
+                        'It is only used when no image is uploaded.</div>', unsafe_allow_html=True)
         st.markdown('<div class="field-label gap">Detection confidence</div>', unsafe_allow_html=True)
         c1, c2 = st.columns([4, 1.15], vertical_alignment="center")
         with c1:
@@ -703,12 +729,14 @@ def home():
             submitted = st.form_submit_button("Analyze", width="stretch")
 
     if submitted:
-        if uploaded is None:
+        source = uploaded if uploaded is not None else samples.get(sample_name)
+        if source is None:
             st.session_state.pop("result", None)
-            notice("Please upload a leaf image first.")
+            notice("Please upload a leaf image" + (" or pick a sample image." if samples else " first."))
         else:
+            file_name = uploaded.name if uploaded is not None else source.name
             try:
-                img = ImageOps.exif_transpose(Image.open(uploaded)).convert("RGB")   # fixes rotated phone photos
+                img = ImageOps.exif_transpose(Image.open(source)).convert("RGB")   # fixes rotated phone photos
                 img.thumbnail((1280, 1280))                                          # keeps CPU time low
             except Exception:
                 st.session_state.pop("result", None)
@@ -720,7 +748,7 @@ def home():
                 res = model.predict(img, conf=conf, imgsz=640, verbose=False)[0]
                 annotated = Image.fromarray(res.plot()[:, :, ::-1])                  # BGR to RGB
                 dets = sorted(((model.names[int(b.cls)], float(b.conf)) for b in res.boxes), key=lambda d: -d[1])
-                st.session_state["result"] = build_result(img, annotated, dets, conf, uploaded.name)
+                st.session_state["result"] = build_result(img, annotated, dets, conf, file_name)
 
     if st.session_state.get("result"):
         show_results(st.session_state["result"])
